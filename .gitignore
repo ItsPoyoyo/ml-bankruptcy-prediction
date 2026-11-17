@@ -1,0 +1,10 @@
+# Track only the code, the dataset and the docs. Everything else stays local.
+/*
+!/.gitignore
+!/README.md
+!/requirements.txt
+!/*.py
+!/data/
+/data/*
+!/data/polish_bankruptcy.csv
+__pycache__/
