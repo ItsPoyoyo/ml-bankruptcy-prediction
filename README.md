@@ -25,14 +25,14 @@ Run them in order. Each one prints its results and saves its figures to `figures
 | `07_compare_models.py` | The final comparison, one change at a time: logistic regression, class weights, gaps and extremes, random forest, gradient boosting |
 | `08_kmeans.py` | Clustering (Aula 08): group companies without the label; elbow and silhouette for k = 2-7, two scaling settings, stability across initializations |
 | `09_knn.py` | KNN (Aula 12): a grid of 40 configurations (scale, K, weights, metric) chosen on validation, cutoff tuned on validation |
-| `10_mlp.py` | Neural network (Aula 13): five MLP configurations trained to 400 epochs with snapshots at 1, 10, 50, 100, 200 and 400; checkpoint and cutoff chosen on validation |
+| `10_mlp.py` | Neural network (Aula 13): five MLP configurations trained to 1,200 epochs with snapshots at 1, 10, 50, 100, 200, 400, 800 and 1,200; checkpoint and cutoff chosen on validation |
 
 `common.py` holds the shared loading, splitting and plotting helpers. `columns.py` lists the 64
 ratios with their formulas.
 
 ## Run it
 
-Python 3.13. Scripts 06, 07 and 09 take about two minutes each; 10 about ten.
+Python 3.13. Scripts 06, 07 and 09 take about two minutes each; 10 about twenty-five.
 
 Windows (PowerShell):
 
@@ -84,38 +84,62 @@ Every configuration is chosen on validation data before the 8,601-record final t
   winner (K = 9, uniform weights, Manhattan) catches 274 of 417 bankruptcies with 2,107 false
   alarms — slightly ahead of the weighted logistic regression (263 caught) — but every prediction
   costs a search through all training records, and the vote shares are not calibrated chances.
-- **Neural network (10).** Following Aula 13, training is watched at six checkpoints (epochs 1,
-  10, 50, 100, 200 and 400): every snapshot of the network is scored on validation data, and the
-  best checkpoint (fewest epochs on ties) is the one that faces the final test. The MLP has no
-  class weights, so the bankrupt records are repeated ten times in the training data (validation
-  and test stay natural). Of the five configurations (20/64 units, one or two hidden layers,
-  sigmoid or ReLU, strong or weak L2), ReLU with two hidden layers 20-10 wins (validation
-  average precision 0.237 at epoch 400), while the sigmoid setup of the lesson ranks last
-  (0.173); every configuration kept improving to epoch 400. The chosen network catches 241 of
-  417 bankruptcies with 1,072 false alarms (test average precision 0.205, Brier 0.097) — a
-  better precision-recall balance than the weighted logistic regression, still below gradient
-  boosting's 0.720. As in script 07, the scores are softmax outputs, not measured probabilities.
+- **Neural network (10).** Following Aula 13, training is watched at checkpoints (epochs 1, 10,
+  50, 100, 200, 400, 800 and 1,200): every snapshot of the network is scored on validation data,
+  and the best checkpoint (fewest epochs on ties) is the one that faces the final test. The
+  lesson stops at 400 epochs; the extra checkpoints show that the classroom cap was premature
+  here — every configuration was still improving at 1,200. The MLP has no class weights, so the
+  bankrupt records are repeated ten times in the training data (validation and test stay
+  natural). Of the five configurations (20/64 units, one or two hidden layers, sigmoid or ReLU,
+  strong or weak L2), ReLU with two hidden layers 20-10 wins (validation average precision 0.288
+  at epoch 1,200), while the sigmoid setup of the lesson ranks last (0.194). The chosen network
+  catches 285 of 417 bankruptcies with 1,181 false alarms (test average precision 0.243, balanced
+  accuracy 0.770, ROC AUC 0.828, Brier 0.091) — clearly ahead of the weighted logistic
+  regression in every metric, but still below the tree ensembles. Against the 400-epoch run,
+  catching more bankruptcies (285 against 241) also raised false alarms (1,181 against 1,072);
+  precision still improved slightly (0.184 to 0.194). As in script 07, the scores are softmax
+  outputs, not measured probabilities.
 
 ## All models on the same final test
 
 Every model below was built on the same deduplicated data and faces the same final test: 8,601
 records, including 417 bankruptcies. Alert cutoffs were tuned on validation data; average
-precision does not depend on the cutoff. Clustering (08) does not predict, so it is not listed.
+precision and the confusion counts do not depend on the cutoff. Clustering (08) does not predict,
+so it is not listed.
 
-| Model (script, cutoff) | Bankruptcies caught | Missed | False alarms | Accuracy | Average precision |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Always "operating" | 0 | 417 | 0 | 95.2% | 0.048 |
-| Decision tree, depth 1 (05) | 0 | 417 | 0 | 95.2% | — |
-| First logistic regression (07) | 6 | 411 | 10 | 95.1% | 0.109 |
-| Weighted logistic regression (09, 10) | 263 | 154 | 2,173 | 72.9% | 0.124 |
-| KNN, K = 9 (09, cutoff 0.01) | 274 | 143 | 2,107 | 73.8% | 0.126 |
-| MLP, two layers 20-10 (10, epoch 400, cutoff 0.46) | 241 | 176 | 1,072 | 85.5% | 0.205 |
-| Random forest (06, cutoff 0.12) | 291 | 126 | 611 | 91.4% | 0.563 |
-| Gradient boosting (07, cutoff 0.56) | 305 | 112 | 368 | 94.4% | 0.681 |
+| Model (script, cutoff) | Accuracy | Balanced accuracy | Precision | Recall | F1 | F2 | MCC | Average precision |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Always "operating" | 95.2% | 0.500 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.048 |
+| Decision tree, depth 1 (05) | 95.2% | 0.500 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | — |
+| First logistic regression (07) | 95.1% | 0.507 | 0.375 | 0.014 | 0.028 | 0.018 | 0.066 | 0.109 |
+| Weighted logistic regression (09, 10) | 72.9% | 0.683 | 0.108 | 0.631 | 0.184 | 0.320 | 0.174 | 0.124 |
+| KNN, K = 9 (09, cutoff 0.01) | 73.8% | 0.700 | 0.115 | 0.657 | 0.196 | 0.338 | 0.192 | 0.126 |
+| MLP, two layers 20-10 (10, epoch 1,200, cutoff 0.42) | 84.7% | 0.770 | 0.194 | 0.683 | 0.303 | 0.455 | 0.308 | 0.243 |
+| Random forest (06, cutoff 0.12) | 91.4% | 0.812 | 0.323 | 0.698 | 0.441 | 0.566 | 0.437 | 0.563 |
+| Gradient boosting (07, cutoff 0.56) | 94.4% | 0.843 | 0.453 | 0.731 | 0.560 | 0.651 | 0.549 | 0.681 |
 
-The ranking mirrors the lesson order: simple models with raw scores stay near the 95% accuracy
-trap, the neural network lands in between, and the tree ensembles catch the most bankruptcies
-with the fewest false alarms. Gradient boosting stays the best of all ten scripts.
+Accuracy alone would pick the useless model: the always-"operating" baseline wins on accuracy
+and loses on every other metric. Balanced accuracy and MCC expose that, F2 rewards catching
+bankruptcies, and average precision measures the ranking used to triage companies. The ranking
+mirrors the lesson order: simple models with raw scores stay near the 95% accuracy trap, the
+neural network lands in between, and the tree ensembles catch the most bankruptcies with the
+fewest false alarms. Gradient boosting stays the best of all ten scripts.
+
+### Confusion matrix counts
+
+TP = caught bankruptcies, FP = false alarms, TN = quiet operating companies, FN = missed
+bankruptcies.
+
+| Model | TP | FP | TN | FN |
+| --- | ---: | ---: | ---: | ---: |
+| Always "operating" | 0 | 0 | 8,184 | 417 |
+| Decision tree, depth 1 (05) | 0 | 0 | 8,184 | 417 |
+| First logistic regression (07) | 6 | 10 | 8,174 | 411 |
+| Weighted logistic regression (09, 10) | 263 | 2,173 | 6,011 | 154 |
+| KNN, K = 9 (09) | 274 | 2,107 | 6,077 | 143 |
+| MLP, two layers 20-10 (10) | 285 | 1,181 | 7,003 | 132 |
+| Random forest (06) | 291 | 611 | 7,573 | 126 |
+| Gradient boosting (07) | 305 | 368 | 7,816 | 112 |
 
 ## About the data
 
