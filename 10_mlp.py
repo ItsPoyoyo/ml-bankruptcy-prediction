@@ -5,25 +5,26 @@ Aula 13 applied to the project's question. A dense multilayer perceptron
 receives the 64 financial ratios, passes them through a hidden layer with a
 non-linear activation (sigmoid, as in the lesson, or ReLU) and answers with
 a probability for the bankruptcy class. Following the lesson, training is
-watched at six checkpoints (epochs 1, 10, 50, 100, 200 and 400); every
+watched at checkpoints (epochs 1, 10, 50, 100, 200, 400, 800 and 1,200); every
 snapshot is scored on validation data, and the checkpoint with the best
 average precision (fewest epochs on ties) is the one that faces the final
 test. The lesson ranks checkpoints by validation accuracy, which works on
 its balanced synthetic digits; here the validation set keeps the natural
 4.8% share, so the script shows both numbers and selects by average
-precision. Five configurations are tested: hidden size, one or two hidden
-layers, activation, and the strength of the L2 regularization that keeps
-the weights small.
+precision. The lesson stops at 400 epochs; the extra checkpoints at 800 and
+1,200 show whether the network kept learning past that point. Five
+configurations are tested: hidden size, one or two hidden layers, activation,
+and the strength of the L2 regularization that keeps the weights small.
 
 Setup: exact duplicates removed; 60% training, 20% validation, 20% final
-test, stratified; median filling and scaling inside the pipeline, learned
-from training data only. The MLP has no class weights, so the bankrupt
-records are repeated ten times in the training data (validation and test
-stay untouched) to keep the network from answering "operating" all the
-time. Each epoch is one fit call of the warm-started network, exactly like
+test, stratified; median filling and standardization fitted once on the
+training data only. The MLP has no class weights, so the bankrupt records
+are repeated ten times in the training data (validation and test stay
+untouched) to keep the network from answering "operating" all the time.
+Each epoch is one fit call of the warm-started network, exactly like
 watching the lesson's epoch counter.
 
-Run: python 10_mlp.py  (about ten minutes)
+Run: python 10_mlp.py  (about thirty minutes)
 Figures: figures/10_mlp/
 Lesson: Aula 13 (neural networks, MLP)
 """
@@ -39,17 +40,19 @@ from sklearn.exceptions import ConvergenceWarning
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (ConfusionMatrixDisplay, accuracy_score, average_precision_score,
-                             brier_score_loss, f1_score, precision_score, recall_score)
+                             balanced_accuracy_score, brier_score_loss, confusion_matrix,
+                             f1_score, matthews_corrcoef, precision_score, recall_score,
+                             roc_auc_score)
 from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from common import (COLORS, SEED, TARGET, count_outcomes, financial_columns, load_data,
+from common import (COLORS, SEED, TARGET, financial_columns, load_data,
                     save_figure, split_60_20_20)
 
 FIGURES = Path(__file__).stem
 CUTOFFS = np.arange(0.01, 1.00, 0.01)
-CHECKPOINTS = [1, 10, 50, 100, 200, 400]
+CHECKPOINTS = [1, 10, 50, 100, 200, 400, 800, 1200]
 CONFIGS = {
     "Sigmoid 20 (lesson setup)": dict(hidden_layer_sizes=(20,), activation="logistic",
                                       alpha=0.01),
@@ -63,13 +66,14 @@ CONFIGS = {
 
 
 def make_mlp(**settings):
-    """Pipeline: median filling, standardization, then the MLP trained one epoch per fit."""
-    return make_pipeline(
-        SimpleImputer(strategy="median"),
-        StandardScaler(),
-        MLPClassifier(random_state=SEED, learning_rate_init=0.001, batch_size=2048,
-                      warm_start=True, max_iter=1, **settings),
-    )
+    """The network itself; preprocessing is fitted once before the epoch loop."""
+    return MLPClassifier(random_state=SEED, learning_rate_init=0.001, batch_size=2048,
+                         warm_start=True, max_iter=1, **settings)
+
+
+def fit_preprocess(X_train):
+    """Median filling and standardization fitted on training data only."""
+    return make_pipeline(SimpleImputer(strategy="median"), StandardScaler()).fit(X_train)
 
 
 def balance_training(X_train, y_train, repeat=10):
@@ -86,7 +90,7 @@ def balance_training(X_train, y_train, repeat=10):
 
 
 def train_config(name, settings, X_train, y_train, X_valid, y_valid):
-    """Train for 400 epochs and score the six checkpoints on validation data."""
+    """Train to the last checkpoint and score every checkpoint on validation data."""
     model = make_mlp(**settings)
     snapshots, history = {}, []
     for epoch in range(1, CHECKPOINTS[-1] + 1):
@@ -100,7 +104,7 @@ def train_config(name, settings, X_train, y_train, X_valid, y_valid):
                 "Epoch": epoch,
                 "Validation AP": average_precision_score(y_valid, scores),
                 "Validation accuracy": accuracy_score(y_valid, scores >= 0.5),
-                "Training loss": model[-1].loss_,
+                "Training loss": model.loss_,
             })
             print(f"    epoch {epoch}: AP {history[-1]['Validation AP']:.3f}, "
                   f"accuracy {history[-1]['Validation accuracy']:.1%}", flush=True)
@@ -142,18 +146,33 @@ def choose_cutoff(y_valid, valid_scores):
 
 
 def result_row(y_test, predicted, scores):
+    """Every metric worth reading, plus the four confusion-matrix counts."""
+    true_negative, false_positive, false_negative, true_positive = confusion_matrix(
+        y_test, predicted, labels=[0, 1]).ravel()
+    precision = precision_score(y_test, predicted, zero_division=0)
+    recall = recall_score(y_test, predicted)
     return {
         "Accuracy": accuracy_score(y_test, predicted),
-        "Precision": precision_score(y_test, predicted, zero_division=0),
-        "Recall": recall_score(y_test, predicted),
+        "Balanced accuracy": balanced_accuracy_score(y_test, predicted),
+        "Precision": precision,
+        "Recall": recall,
+        "Specificity": true_negative / (true_negative + false_positive)
+        if true_negative + false_positive else 0,
         "F1": f1_score(y_test, predicted, zero_division=0),
+        "F2": (5 * precision * recall) / (4 * precision + recall)
+        if precision + recall else 0,
         "Average precision": average_precision_score(y_test, scores),
-        **count_outcomes(y_test, predicted),
+        "ROC AUC": roc_auc_score(y_test, scores),
+        "MCC": matthews_corrcoef(y_test, predicted),
+        "TP": int(true_positive),
+        "FP": int(false_positive),
+        "TN": int(true_negative),
+        "FN": int(false_negative),
     }
 
 
 def plot_checkpoints(histories, best_name, best_epoch):
-    """Validation scores at the six checkpoints, per configuration."""
+    """Validation scores at every checkpoint, per configuration."""
     fig, axes = plt.subplots(1, 2, figsize=(13.5, 4.5))
     for name, history in histories.items():
         chosen = name == best_name
@@ -211,13 +230,14 @@ def plot_confusion(y_test, predicted, name):
 
 
 def plot_final(final):
-    fig, ax = plt.subplots(figsize=(11, 5))
-    final[["Accuracy", "Precision", "Recall", "F1"]].plot.bar(
-        ax=ax, rot=0, color=[COLORS["context"], COLORS["operating"], COLORS["bankrupt"],
-                             COLORS["test"]])
+    fig, ax = plt.subplots(figsize=(12, 5))
+    columns = ["Accuracy", "Balanced accuracy", "Precision", "Recall", "F1"]
+    final[columns].plot.bar(
+        ax=ax, rot=0, color=[COLORS["context"], COLORS["validation"], COLORS["operating"],
+                             COLORS["bankrupt"], COLORS["test"]])
     ax.set(title="Final test: accuracy hides the bankruptcies", ylabel="Score", xlabel="",
            ylim=(0, 1.05))
-    ax.legend(ncol=4, loc="upper center")
+    ax.legend(ncol=5, loc="upper center")
     save_figure(fig, FIGURES, "05_final_test_metrics.png")
 
 
@@ -249,10 +269,15 @@ def main():
     print(f"Bankrupt records repeated 10x for training: {len(X_train_balanced):,} records, "
           f"bankruptcy share {(y_train_balanced == 1).mean():.1%} (validation and test stay "
           "natural)")
+    preprocess = fit_preprocess(X_train)
+    train_matrix = preprocess.transform(X_train_balanced)
+    valid_matrix = preprocess.transform(X_valid)
+    test_matrix = preprocess.transform(X_test)
+    print("Median filling and standardization fitted once on training data only.")
 
     print(f"\nTraining to {CHECKPOINTS[-1]} epochs, snapshots at {CHECKPOINTS}:")
-    snapshots, histories, validation = train_configs(X_train_balanced, y_train_balanced,
-                                                     X_valid, y_valid)
+    snapshots, histories, validation = train_configs(train_matrix, y_train_balanced,
+                                                     valid_matrix, y_valid)
     best_name = validation["Validation AP"].idxmax()
     best_epoch = int(validation.loc[best_name, "Chosen epoch"])
     print(validation.round(3).to_string())
@@ -261,7 +286,7 @@ def main():
     plot_configs(validation, best_name)
 
     best_model = snapshots[best_name][best_epoch]
-    valid_scores = best_model.predict_proba(X_valid)[:, 1]
+    valid_scores = best_model.predict_proba(valid_matrix)[:, 1]
     cutoff, f2 = choose_cutoff(y_valid, valid_scores)
     print(f"Cutoff tuned on validation (best F2): {cutoff:.2f}")
     plot_cutoff(CUTOFFS, f2, cutoff)
@@ -271,7 +296,7 @@ def main():
         LogisticRegression(max_iter=1000, class_weight="balanced")).fit(X_train, y_train)
     always_operating = DummyClassifier(strategy="most_frequent").fit(X_train, y_train)
 
-    test_scores = best_model.predict_proba(X_test)[:, 1]
+    test_scores = best_model.predict_proba(test_matrix)[:, 1]
     predictions = {
         "Always operating": always_operating.predict(X_test),
         "Weighted logistic": weighted_logistic.predict(X_test),
@@ -285,8 +310,14 @@ def main():
     final = pd.DataFrame.from_dict(
         {name: result_row(y_test, predictions[name], scores[name]) for name in predictions},
         orient="index")
+    metrics = ["Accuracy", "Balanced accuracy", "Precision", "Recall", "Specificity",
+               "F1", "F2", "Average precision", "ROC AUC", "MCC"]
+    counts = ["TP", "FP", "TN", "FN"]
     print(f"\nFinal test ({len(y_test):,} records, {int(y_test.sum())} bankruptcies):")
-    print(final.round(3).to_string())
+    print(final[metrics].round(3).to_string())
+    print("\nConfusion counts on the final test (TP = caught bankruptcies, FP = false alarms, "
+          "TN = quiet operating companies, FN = missed bankruptcies):")
+    print(final[counts].to_string())
     plot_confusion(y_test, predictions[f"MLP at cutoff {cutoff:.2f}"],
                    f"{best_name}, epoch {best_epoch}, cutoff {cutoff:.2f}")
     plot_final(final)
@@ -294,12 +325,13 @@ def main():
 
     tuned = final.loc[f"MLP at cutoff {cutoff:.2f}"]
     brier = brier_score_loss(y_test, test_scores)
-    last_ap = histories[best_name].set_index("Epoch").loc[400, "Validation AP"]
-    print(f"\nMLP caught {int(tuned['caught'])} of {int(y_test.sum())} bankruptcies "
-          f"with {int(tuned['false_alarms']):,} false alarms at cutoff {cutoff:.2f}.")
+    last_ap = histories[best_name].set_index("Epoch").loc[CHECKPOINTS[-1], "Validation AP"]
+    print(f"\nMLP caught {int(tuned['TP'])} of {int(y_test.sum())} bankruptcies "
+          f"with {int(tuned['FP']):,} false alarms at cutoff {cutoff:.2f} "
+          f"(missed {int(tuned['FN'])}, quiet companies correctly left alone {int(tuned['TN']):,}).")
     print(f"Validation AP of the chosen checkpoint: "
           f"{histories[best_name].set_index('Epoch').loc[best_epoch, 'Validation AP']:.3f} "
-          f"(epoch {best_epoch}) vs {last_ap:.3f} at epoch 400.")
+          f"(epoch {best_epoch}) vs {last_ap:.3f} at epoch {CHECKPOINTS[-1]}.")
     print(f"Brier score of the MLP scores: {brier:.4f} (lower is better; 0.25 = always guessing)")
     print("High scores come from softmax outputs, not from measured frequencies: the same "
           "calibration caveat as in script 07 applies here.")
